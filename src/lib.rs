@@ -157,7 +157,7 @@ impl GenomicPositions {
         self.0.push(value)
     }
 
-    fn positions(&self, positions: Vec<(String, i32)>) -> Vec<Option<(u64, u64)>> {
+    fn positions(&self, positions: Vec<(String, i32)>, tolerance: i32) -> Vec<Option<(u64, u64)>> {
         let mut res = Vec::new();
         let mut curr_to_find = 0;
         let len_positions = positions.len();
@@ -172,7 +172,7 @@ impl GenomicPositions {
 
                 loop {
                     if curr_to_find == len_positions { break; }
-                    if gp.contig == positions[curr_to_find].0 && gp.start <= positions[curr_to_find].1 && positions[curr_to_find].1 <= gp.end {
+                    if gp.contig == positions[curr_to_find].0 && gp.start - tolerance <= positions[curr_to_find].1 && positions[curr_to_find].1 <= gp.end + tolerance {
                         res.push(Some((*offset, *n_pos)));
                         curr_to_find += 1;
                     } else { break; }
@@ -273,9 +273,9 @@ impl TableFile {
         Ok((gp, reader))
     }
 
-    pub fn get_positions_lines(&mut self, positions: Vec<(String, i32)>, sep: &str, position_columns: &Vec<usize>) -> Result<Vec<Option<String>>, MyError> {
+    pub fn get_positions_lines(&mut self, positions: Vec<(String, i32)>, sep: &str, position_columns: &Vec<usize>, tolerance: i32) -> Result<Vec<Option<String>>, MyError> {
         let ordered = order_positions(positions, self.index.contigs_order());
-        let positions = self.index.positions(ordered.iter().map(|(_, p)| p.clone()).collect());
+        let positions = self.index.positions(ordered.iter().map(|(_, p)| p.clone()).collect(), tolerance);
         let mut dedup: HashMap<u64, (Vec<usize>, u64)> = HashMap::new();
         for (i, p) in positions.iter().enumerate() {
             if let Some((pos, max_lines)) = p {
@@ -321,7 +321,7 @@ impl TableFile {
                             }
                             let (start, stop) = (str[1].trim().parse::<i32>()?, str[2].trim().parse::<i32>()?);
                             loop {
-                                if start <= position && position <= stop {
+                                if start - tolerance <= position && position <= stop + tolerance {
                                     let mut res_item = res.get_mut(ordered_id).unwrap();
                                     res_item.1 = Some(line_buffer.clone().trim().to_string()); 
     
@@ -393,7 +393,7 @@ mod tests {
             Some("2486\t1442\t13\t8\t38\tchr1\t249239883\t249240621\t-10000\t+\t(TTAGGG)n\tSimple_repeat\tSimple_repeat\t1\t716\t0\t3".to_string())
         ];
 
-        if let Ok(res) = res.get_positions_lines(my_pos.clone(), sep, &position_columns) {
+        if let Ok(res) = res.get_positions_lines(my_pos.clone(), sep, &position_columns, 0) {
             for r in my_pos.into_iter().zip(&res) {
                 println!("{:?}", r.1);
             }
