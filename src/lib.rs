@@ -8,38 +8,38 @@ use std::path::Path;
 use flate2::read::GzDecoder;
 use noodles::bgzf::{VirtualPosition, Reader, MultithreadedWriter};
 
-pub enum MyError {
+pub enum TRError {
     IoErr(std::io::Error),
     ParseIntError(ParseIntError),
     ColumnsNotFound,
     Infallible(std::convert::Infallible)
 }
 
-impl From<std::io::Error> for MyError {
-    fn from(e: std::io::Error) -> MyError {
+impl From<std::io::Error> for TRError {
+    fn from(e: std::io::Error) -> TRError {
         Self::IoErr(e)
     }
 }
 
-impl From<ParseIntError> for MyError {
+impl From<ParseIntError> for TRError {
     fn from(e: ParseIntError) -> Self {
         Self::ParseIntError(e)
     }
 }
 
-impl From<std::convert::Infallible> for MyError {
+impl From<std::convert::Infallible> for TRError {
     fn from(e: std::convert::Infallible) -> Self {
         Self::Infallible(e)
     }
 }
 
-impl Debug for MyError {
+impl Debug for TRError {
     fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
         match self {
-            MyError::IoErr(err) => write!(f, "IoErr {:?}", err),
-            MyError::ParseIntError(err) => write!(f, "ParseIntError {:?}", err),
-            MyError::ColumnsNotFound => write!(f, "ColumnsNotFound"),
-            MyError::Infallible(_err) => write!(f, "ColumnsNotFound"),
+            TRError::IoErr(err) => write!(f, "[ERROR] Input/Output: {}", err.to_string()),
+            TRError::ParseIntError(err) => write!(f, "ParseIntError {:?}", err),
+            TRError::ColumnsNotFound => write!(f, "ColumnsNotFound"),
+            TRError::Infallible(_err) => write!(f, "ColumnsNotFound"),
         }
     }
 }
@@ -52,7 +52,7 @@ struct GenomicPosition {
 }
 
 impl GenomicPosition {
-    fn from_line(line: &String, sep: &str, position_columns: &Vec<usize>) -> Result<GenomicPosition, MyError> {
+    fn from_line(line: &String, sep: &str, position_columns: &Vec<usize>) -> Result<GenomicPosition, TRError> {
         let str = line
         .split(sep)
         .enumerate()
@@ -61,7 +61,7 @@ impl GenomicPosition {
         .collect::<Vec<String>>();
 
         if str.len() != 3 {
-            return Err(MyError::ColumnsNotFound)
+            return Err(TRError::ColumnsNotFound)
         }
 
         Ok(GenomicPosition {
@@ -80,7 +80,7 @@ impl GenomicPositions {
     }
 
     /// Load GenomicPositions from index file
-    fn new_from_index(path: &str, sep: &str) -> Result<GenomicPositions, MyError> {
+    fn new_from_index(path: &str, sep: &str) -> Result<GenomicPositions, TRError> {
         let mut res = GenomicPositions(Vec::new());
         let mut reader = std::io::BufReader::new(File::open(&path)?);
         // let mut reader = File::open(&path).map(Reader::new)?;
@@ -118,12 +118,12 @@ impl GenomicPositions {
         Ok(res)
     }
 
-    fn push_from_line(&mut self, offset: u64, line: &String, sep: &str, position_columns: &Vec<usize>, n_pos: u64) -> Result<(), MyError> {
+    fn push_from_line(&mut self, offset: u64, line: &String, sep: &str, position_columns: &Vec<usize>, n_pos: u64) -> Result<(), TRError> {
         self.0.push((offset, GenomicPosition::from_line(line, sep, position_columns)?, n_pos));
         Ok(())
     }
 
-    fn write_index(&self, path: &str, by: usize) -> Result<(), MyError> {
+    fn write_index(&self, path: &str, by: usize) -> Result<(), TRError> {
         let mut write_buffer = std::io::BufWriter::new(File::create(&path)?);
 
         let mut last_contig = self.0[0].1.contig.clone();
@@ -198,12 +198,12 @@ pub struct TableFile {
 }
 
 impl TableFile {
-    pub fn new(path: &str, sep: &str, position_columns: &Vec<usize>) -> Result<TableFile, MyError> {
+    pub fn new(path: &str, sep: &str, position_columns: &Vec<usize>) -> Result<TableFile, TRError> {
         let (index, reader) = TableFile::get_readers(path, sep, position_columns)?;
         Ok(TableFile { index, reader })
     }
 
-    fn get_readers(path: &str, sep: &str, position_columns: &Vec<usize>) -> Result<(GenomicPositions, Reader<File>), MyError> {
+    fn get_readers(path: &str, sep: &str, position_columns: &Vec<usize>) -> Result<(GenomicPositions, Reader<File>), TRError> {
         let mut reader = File::open(&path).map(Reader::new)?;
         
         let test = reader.seek(reader.virtual_position());
@@ -253,7 +253,7 @@ impl TableFile {
                         
                         match gp.push_from_line(offset, &line_buffer, sep, &position_columns, 1) {
                             Ok(_) => (),
-                            Err(_) => println!("Parsing error line: {}", n_line),
+                            Err(_) => println!("Parsing error line: {}\n{}", n_line, &line_buffer),
                         }
                     },
                     Err(err) => {
@@ -273,7 +273,7 @@ impl TableFile {
         Ok((gp, reader))
     }
 
-    pub fn get_positions_lines(&mut self, positions: Vec<(String, i32)>, sep: &str, position_columns: &Vec<usize>, tolerance: i32) -> Result<Vec<Option<String>>, MyError> {
+    pub fn get_positions_lines(&mut self, positions: Vec<(String, i32)>, sep: &str, position_columns: &Vec<usize>, tolerance: i32) -> Result<Vec<Option<String>>, TRError> {
         let ordered = order_positions(positions, self.index.contigs_order());
         let positions = self.index.positions(ordered.iter().map(|(_, p)| p.clone()).collect(), tolerance);
         let mut dedup: HashMap<u64, (Vec<usize>, u64)> = HashMap::new();
@@ -317,7 +317,7 @@ impl TableFile {
                             .collect::<Vec<String>>();
 
                             if str.len() != 3 {
-                                return Err(MyError::ColumnsNotFound)
+                                return Err(TRError::ColumnsNotFound)
                             }
                             let (start, stop) = (str[1].trim().parse::<i32>()?, str[2].trim().parse::<i32>()?);
                             loop {
@@ -401,6 +401,37 @@ mod tests {
             for r in res.into_iter().zip(expected) {
                 assert_eq!(r.0, r.1);
             }
+        }
+
+        println!("{:#?}", now.elapsed());
+        
+    }
+    #[test]
+    fn it_works2() {
+        let now = Instant::now();
+    
+        let path = "/home/thomas/NGS/ref/hg19.refGene.sortedhh.gtf.gz";
+
+        let sep = "\t";
+        let position_columns = vec![0, 3, 4];
+
+        let mut res = TableFile::new(path, sep, &position_columns).unwrap();
+        let my_pos = vec![("chr1".to_string(), 249_240_620), ("chr10".to_string(), 524_779_845), ("chr1".to_string(), 249_240_621)];
+
+        // let expected = vec![
+        //     Some("2486\t1442\t13\t8\t38\tchr1\t249239883\t249240621\t-10000\t+\t(TTAGGG)n\tSimple_repeat\tSimple_repeat\t1\t716\t0\t3".to_string()), 
+        //     None,
+        //     Some("2486\t1442\t13\t8\t38\tchr1\t249239883\t249240621\t-10000\t+\t(TTAGGG)n\tSimple_repeat\tSimple_repeat\t1\t716\t0\t3".to_string())
+        // ];
+
+        if let Ok(res) = res.get_positions_lines(my_pos.clone(), sep, &position_columns, 0) {
+            for r in my_pos.into_iter().zip(&res) {
+                println!("{:?}", r.1);
+            }
+
+            // for r in res.into_iter().zip(expected) {
+            //     assert_eq!(r.0, r.1);
+            // }
         }
 
         println!("{:#?}", now.elapsed());
