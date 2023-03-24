@@ -44,6 +44,17 @@ impl Debug for TRError {
     }
 }
 
+impl std::fmt::Display for TRError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TRError::IoErr(err) => write!(f, "[ERROR] Input/Output: {}", err.to_string()),
+            TRError::ParseIntError(err) => write!(f, "ParseIntError {:?}", err),
+            TRError::ColumnsNotFound => write!(f, "ColumnsNotFound"),
+            TRError::Infallible(_err) => write!(f, "ColumnsNotFound"),
+        }
+    }
+}
+
 #[derive(Debug)]
 struct GenomicPosition {
     contig: String,
