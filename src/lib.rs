@@ -55,6 +55,7 @@ impl std::fmt::Display for TRError {
     }
 }
 
+
 #[derive(Debug)]
 struct GenomicPosition {
     contig: String,
@@ -426,7 +427,13 @@ mod tests {
         let sep = "\t";
         let position_columns = vec![0, 3, 4];
 
-        let mut res = TableFile::new(path, sep, &position_columns).unwrap();
+        
+        let mut table = match TableFile::new(path, sep, &position_columns) {
+            Ok(tf) => tf,
+            Err(r) => panic!("{:?}", r.to_string()),
+        };
+
+
         let my_pos = vec![("chr1".to_string(), 249_240_620), ("chr10".to_string(), 524_779_845), ("chr1".to_string(), 249_240_621)];
 
         // let expected = vec![
@@ -435,7 +442,7 @@ mod tests {
         //     Some("2486\t1442\t13\t8\t38\tchr1\t249239883\t249240621\t-10000\t+\t(TTAGGG)n\tSimple_repeat\tSimple_repeat\t1\t716\t0\t3".to_string())
         // ];
 
-        if let Ok(res) = res.get_positions_lines(my_pos.clone(), sep, &position_columns, 0) {
+        if let Ok(res) = table.get_positions_lines(my_pos.clone(), sep, &position_columns, 0) {
             for r in my_pos.into_iter().zip(&res) {
                 println!("{:?}", r.1);
             }
