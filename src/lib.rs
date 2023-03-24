@@ -1,18 +1,23 @@
-use std::collections::HashMap;
-use std::fs::{File, rename};
-use std::io::{BufRead, copy, ErrorKind, Write};
-use std::fmt::{Formatter, Debug, self};
-use std::num::{ParseIntError, NonZeroUsize};
-use std::path::Path;
+use std::{
+    collections::HashMap,
+    fs::{File, rename},
+    io::{BufRead, copy, ErrorKind, Write, BufReader},
+    fmt::Debug,
+    num::{ParseIntError, NonZeroUsize},
+    path::Path
+};
 
 use flate2::read::GzDecoder;
-use noodles::bgzf::{VirtualPosition, Reader, MultithreadedWriter};
+use noodles::bgzf::{VirtualPosition, Reader as BGZReader, MultithreadedWriter};
 
+#[derive(Debug)]
 pub enum TRError {
     IoErr(std::io::Error),
     ParseIntError(ParseIntError),
     ColumnsNotFound,
-    Infallible(std::convert::Infallible)
+    Infallible(std::convert::Infallible),
+    InvalidFileFormat,
+    NotSorted
 }
 
 impl From<std::io::Error> for TRError {
@@ -33,30 +38,20 @@ impl From<std::convert::Infallible> for TRError {
     }
 }
 
-impl Debug for TRError {
-    fn fmt(&self, f: &mut Formatter) -> Result<(), fmt::Error> {
-        match self {
-            TRError::IoErr(err) => write!(f, "[ERROR] Input/Output: {}", err.to_string()),
-            TRError::ParseIntError(err) => write!(f, "ParseIntError {:?}", err),
-            TRError::ColumnsNotFound => write!(f, "ColumnsNotFound"),
-            TRError::Infallible(_err) => write!(f, "ColumnsNotFound"),
-        }
-    }
-}
-
 impl std::fmt::Display for TRError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TRError::IoErr(err) => write!(f, "[ERROR] Input/Output: {}", err.to_string()),
+            TRError::IoErr(err) => write!(f, "[Error] Input/Output: {}", err.to_string()),
             TRError::ParseIntError(err) => write!(f, "ParseIntError {:?}", err),
-            TRError::ColumnsNotFound => write!(f, "ColumnsNotFound"),
-            TRError::Infallible(_err) => write!(f, "ColumnsNotFound"),
+            TRError::ColumnsNotFound => write!(f, "[Error] Error while parsing columns, are the arguments of the columns positions or the separator well filled ?"),
+            TRError::Infallible(_err) => write!(f, "[Error] Error while parsing columns, are the arguments of the columns positions or the separator well filled ?"),
+            TRError::InvalidFileFormat => write!(f, "[Error] Incompatible file format."),
+            TRError::NotSorted => write!(f, "[Error] Positions aren't sorted."),
         }
     }
 }
 
-
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct GenomicPosition {
     contig: String,
     start : i32,
@@ -130,9 +125,10 @@ impl GenomicPositions {
         Ok(res)
     }
 
-    fn push_from_line(&mut self, offset: u64, line: &String, sep: &str, position_columns: &Vec<usize>, n_pos: u64) -> Result<(), TRError> {
-        self.0.push((offset, GenomicPosition::from_line(line, sep, position_columns)?, n_pos));
-        Ok(())
+    fn push_from_line(&mut self, offset: u64, line: &String, sep: &str, position_columns: &Vec<usize>, n_pos: u64) -> Result<GenomicPosition, TRError> {
+        let to_add = GenomicPosition::from_line(line, sep, position_columns)?;
+        self.0.push((offset, to_add.clone(), n_pos));
+        Ok(to_add)
     }
 
     fn write_index(&self, path: &str, by: usize) -> Result<(), TRError> {
@@ -142,8 +138,7 @@ impl GenomicPositions {
         let mut pos_first = 0;
         
         for (i, current) in self.0.iter().enumerate() {
-
-            if (i - pos_first) == by + 1|| last_contig != current.1.contig {
+            if (i - pos_first) == by + 1 || last_contig != current.1.contig {
                 let first = self.0.get(pos_first).unwrap();
                 let last = self.0.get(i - 1).unwrap();
                 let mut l = vec![
@@ -206,37 +201,65 @@ impl GenomicPositions {
 
 pub struct TableFile {
     index: GenomicPositions,
-    reader: Reader<File>
+    reader: BGZReader<File>
 }
 
 impl TableFile {
-    pub fn new(path: &str, sep: &str, position_columns: &Vec<usize>) -> Result<TableFile, TRError> {
-        let (index, reader) = TableFile::get_readers(path, sep, position_columns)?;
+    pub fn new(path: &str, sep: &str, position_columns: &Vec<usize>, comment: &str) -> Result<TableFile, TRError> {
+        let (index, reader) = TableFile::get_readers(path, sep, position_columns, comment)?;
         Ok(TableFile { index, reader })
     }
 
-    fn get_readers(path: &str, sep: &str, position_columns: &Vec<usize>) -> Result<(GenomicPositions, Reader<File>), TRError> {
-        let mut reader = File::open(&path).map(Reader::new)?;
-        
-        let test = reader.seek(reader.virtual_position());
+    fn get_readers(path: &str, sep: &str, position_columns: &Vec<usize>, comment: &str) -> Result<(GenomicPositions, BGZReader<File>), TRError> {
+        let mut path = path.to_string();
 
+        if let Some(r) = Path::new(&path).extension() {
+            if let Some(ext) = r.to_str() {
+                if ext != "gz" {
+                    let tp = format!("{}.gz", path.clone()).to_string();
+                    if std::path::Path::new(&tp).exists() {
+                        path = tp;
+                    }
+                }
+            }
+        }
+
+        println!("Loading {}", path);
+        let mut reader = File::open(&path).map(BGZReader::new)?;
+        let test = reader.seek(reader.virtual_position());
         let mut reader = match test {
             Ok(_) => reader,
             Err(err) => {
                 match err.kind() {
                     ErrorKind::InvalidData => {
-                        println!("Not BGZF, converting...");
+                        println!("The table file isn't in BGZ format.");
                         
                         let mut tmp_file = std::env::temp_dir();
                         tmp_file.push("reader-tmp.gz");
-                        
-                        let mut decoder = GzDecoder::new(File::open(path)?);
-
                         let mut writer = MultithreadedWriter::with_worker_count(NonZeroUsize::new(5).unwrap(), File::create(&tmp_file)?);
-                        copy(&mut decoder, &mut writer)?;
+                        
+                        match Path::new(&path).extension() {
+                            Some(ext) => {
+                                match ext.to_str() {
+                                    Some("gz") => {
+                                        println!("Converting from GZ format.");
+                                        let mut decoder = GzDecoder::new(File::open(&path)?);
+                                        copy(&mut decoder, &mut writer)?;
+                                    },
+                                    _ => {
+                                        println!("Converting from TXT format.");
+                                        let mut decoder = BufReader::new(File::open(&path)?);
+                                        copy(&mut decoder, &mut writer)?;
+                                        path = format!("{}.gz", path.clone()).to_string();
+                                    },
+                                }
+                                
+                            },
+                            None => return Err(TRError::InvalidFileFormat),
+                        }
 
-                        rename(tmp_file, path)?;
-                        File::open(&path).map(Reader::new)?
+                        rename(tmp_file, path.clone())?;
+                        File::open(&path).map(BGZReader::new)?
                     },
                     _ => panic!("{:?}", err),
                 }
@@ -256,6 +279,8 @@ impl TableFile {
             let mut n_line = 0;
             let mut line_buffer = String::new();
 
+            let mut last_gp: Option<GenomicPosition> = None;
+
             loop {
                 let offset = reader.virtual_position().try_into().unwrap();
 
@@ -263,9 +288,23 @@ impl TableFile {
                     Ok(size) => {
                         if size == 0 { break; }
                         
-                        match gp.push_from_line(offset, &line_buffer, sep, &position_columns, 1) {
-                            Ok(_) => (),
-                            Err(_) => println!("Parsing error line: {}\n{}", n_line, &line_buffer),
+                        if &line_buffer[..1] != comment { 
+                            match gp.push_from_line(offset, &line_buffer, sep, &position_columns, 1) {
+                                Ok(gp) => {
+                                    if let Some(ls) = last_gp {
+                                        if ls.start > gp.start && ls.contig == gp.contig {
+
+                                            eprintln!("last start {}:{}, current start {}:{}", ls.contig, ls.start, gp.contig, gp.start);
+                                            return Err(TRError::NotSorted);
+                                        }
+                                    }
+                                    last_gp = Some(gp);
+                                },
+                                Err(_) => {
+                                    println!("Parsing error line: {}\n{}", n_line, &line_buffer);
+                                    return Err(TRError::ColumnsNotFound)
+                                },
+                            }
                         }
                     },
                     Err(err) => {
@@ -273,6 +312,7 @@ impl TableFile {
                     }
                 }
                 line_buffer.clear();
+
                 n_line += 1;
 
                 if n_line % 100_000 == 0 {
@@ -285,7 +325,7 @@ impl TableFile {
         Ok((gp, reader))
     }
 
-    pub fn get_positions_lines(&mut self, positions: Vec<(String, i32)>, sep: &str, position_columns: &Vec<usize>, tolerance: i32) -> Result<Vec<Option<String>>, TRError> {
+    pub fn get_positions_lines(&mut self, positions: Vec<(String, i32)>, sep: &str, position_columns: &Vec<usize>, tolerance: i32, comment: &str) -> Result<Vec<Option<String>>, TRError> {
         let ordered = order_positions(positions, self.index.contigs_order());
         let positions = self.index.positions(ordered.iter().map(|(_, p)| p.clone()).collect(), tolerance);
         let mut dedup: HashMap<u64, (Vec<usize>, u64)> = HashMap::new();
@@ -309,7 +349,6 @@ impl TableFile {
 
             let mut curr_i = 0;
 
-            // let (mut index, (mut contig, mut position)) = sub_ordered.get(curr_i).unwrap().clone();
             let mut ordered_id = *items_ids.get(curr_i).unwrap();
             let (_, (_, mut position)) = ordered.get(ordered_id).unwrap().clone();
 
@@ -321,31 +360,31 @@ impl TableFile {
                         if code == 0 { break; } else {
                             if n_lines == max_lines + 1 { break; }
 
-                            let str = line_buffer
-                            .split(sep)
-                            .enumerate()
-                            .filter(|(i, _)| position_columns.contains(i))
-                            .map(|(_,e)| e.to_owned())
-                            .collect::<Vec<String>>();
+                            if &line_buffer[..1] != comment {
 
-                            if str.len() != 3 {
-                                return Err(TRError::ColumnsNotFound)
-                            }
-                            let (start, stop) = (str[1].trim().parse::<i32>()?, str[2].trim().parse::<i32>()?);
-                            loop {
-                                if start - tolerance <= position && position <= stop + tolerance {
-                                    let mut res_item = res.get_mut(ordered_id).unwrap();
-                                    res_item.1 = Some(line_buffer.clone().trim().to_string()); 
-    
-                                    curr_i += 1;
-                                    if let Some(o_i) = items_ids.get(curr_i) {
-                                        ordered_id = *o_i;
-                                        (_, (_, position)) = ordered.get(ordered_id).unwrap().clone();
-                                    } else {
-                                        break;
-                                    }
-                                } else {
-                                    break;
+                                let str = line_buffer
+                                .split(sep)
+                                .enumerate()
+                                .filter(|(i, _)| position_columns.contains(i))
+                                .map(|(_,e)| e.to_owned())
+                                .collect::<Vec<String>>();
+
+                                if str.len() != 3 {
+                                    return Err(TRError::ColumnsNotFound)
+                                }
+                                let (start, stop) = (str[1].trim().parse::<i32>()?, str[2].trim().parse::<i32>()?);
+
+                                loop {
+                                    if start - tolerance <= position && position <= stop + tolerance {
+                                        let mut res_item = res.get_mut(ordered_id).unwrap();
+                                        res_item.1 = Some(line_buffer.clone().trim().to_string()); 
+        
+                                        curr_i += 1;
+                                        if let Some(o_i) = items_ids.get(curr_i) {
+                                            ordered_id = *o_i;
+                                            (_, (_, position)) = ordered.get(ordered_id).unwrap().clone();
+                                        } else { break; }
+                                    } else { break; }
                                 }
                             }
                             
@@ -395,8 +434,9 @@ mod tests {
         let path = "/home/thomas/NGS/ref/hg19/rmsk.txt.gz";
         let sep = "\t";
         let position_columns = vec![5, 6, 7];
+        let comment = "#";
 
-        let mut res = TableFile::new(path, sep, &position_columns).unwrap();
+        let mut res = TableFile::new(path, sep, &position_columns, comment).unwrap();
         let my_pos = vec![("chr1".to_string(), 249_240_620), ("chr10".to_string(), 524_779_845), ("chr1".to_string(), 249_240_621)];
 
         let expected = vec![
@@ -405,7 +445,7 @@ mod tests {
             Some("2486\t1442\t13\t8\t38\tchr1\t249239883\t249240621\t-10000\t+\t(TTAGGG)n\tSimple_repeat\tSimple_repeat\t1\t716\t0\t3".to_string())
         ];
 
-        if let Ok(res) = res.get_positions_lines(my_pos.clone(), sep, &position_columns, 0) {
+        if let Ok(res) = res.get_positions_lines(my_pos.clone(), sep, &position_columns, 0, comment) {
             for r in my_pos.into_iter().zip(&res) {
                 println!("{:?}", r.1);
             }
@@ -418,41 +458,5 @@ mod tests {
         println!("{:#?}", now.elapsed());
         
     }
-    #[test]
-    fn it_works2() {
-        let now = Instant::now();
     
-        let path = "/home/thomas/NGS/ref/hg19.refGene.sortedhh.gtf.gz";
-
-        let sep = "\t";
-        let position_columns = vec![0, 3, 4];
-
-        
-        let mut table = match TableFile::new(path, sep, &position_columns) {
-            Ok(tf) => tf,
-            Err(r) => panic!("{:?}", r.to_string()),
-        };
-
-
-        let my_pos = vec![("chr1".to_string(), 249_240_620), ("chr10".to_string(), 524_779_845), ("chr1".to_string(), 249_240_621)];
-
-        // let expected = vec![
-        //     Some("2486\t1442\t13\t8\t38\tchr1\t249239883\t249240621\t-10000\t+\t(TTAGGG)n\tSimple_repeat\tSimple_repeat\t1\t716\t0\t3".to_string()), 
-        //     None,
-        //     Some("2486\t1442\t13\t8\t38\tchr1\t249239883\t249240621\t-10000\t+\t(TTAGGG)n\tSimple_repeat\tSimple_repeat\t1\t716\t0\t3".to_string())
-        // ];
-
-        if let Ok(res) = table.get_positions_lines(my_pos.clone(), sep, &position_columns, 0) {
-            for r in my_pos.into_iter().zip(&res) {
-                println!("{:?}", r.1);
-            }
-
-            // for r in res.into_iter().zip(expected) {
-            //     assert_eq!(r.0, r.1);
-            // }
-        }
-
-        println!("{:#?}", now.elapsed());
-        
-    }
 }
