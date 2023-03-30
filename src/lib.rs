@@ -166,10 +166,7 @@ impl GenomicPositions {
 
     fn positions(&self, positions: Vec<(String, i32)>, tolerance: i32) -> Vec<Option<(u64, u64)>> {
         let mut res = Vec::new();
-        println!("positions {:?}", positions);
-        
         let mut positions_iter = positions.iter();
-        
 
         let (current, mut next) = (positions_iter.next(), positions_iter.next());
         
@@ -183,9 +180,7 @@ impl GenomicPositions {
                     if current_contig == gp.contig && gp.start - tolerance <= current_pos && current_pos <= gp.end + tolerance {
                         res.push(Some((*offset, *n_pos)));
                         to_next = true;
-                    }
-
-                    if let Some((next_contig, next_position)) = next {
+                    } else if let Some((next_contig, next_position)) = next {
                         if gp.contig == next_contig.to_string() {
                             if gp.start - tolerance <= *next_position && *next_position <= gp.end + tolerance {
                                 res.push(None);
