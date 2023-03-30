@@ -168,29 +168,49 @@ impl GenomicPositions {
         let mut res = Vec::new();
         let mut curr_to_find = 0;
         let len_positions = positions.len();
-        let mut has_search_in_contig = false;
-        for (offset, gp, n_pos) in self.0.iter() {
-            if curr_to_find == len_positions { break; }
-            if gp.contig == positions[curr_to_find].0 {
-                has_search_in_contig = true;
+        println!("positions {:?}", positions);
 
-                if positions[curr_to_find].1 < gp.start { continue;}
-                if positions[curr_to_find].1 > gp.end { continue;}
+        let mut cid = 0;
+        let mut positions_iter = positions.iter();
+        let mut current_contig = "".to_string();
 
-                loop {
-                    if curr_to_find == len_positions { break; }
-                    if gp.contig == positions[curr_to_find].0 && gp.start - tolerance <= positions[curr_to_find].1 && positions[curr_to_find].1 <= gp.end + tolerance {
+        let (mut current, mut next) = (positions_iter.next(), positions_iter.next());
+        
+        if let Some((contig, position)) = current {
+            let mut current_contig = contig.to_string();
+            let mut current_pos = *position;
+
+            'A: for (offset, gp, n_pos) in self.0.iter() {
+                let mut to_next = false;
+                'B: loop {
+                    if current_contig == gp.contig && gp.start - tolerance <= current_pos && current_pos <= gp.end + tolerance {
                         res.push(Some((*offset, *n_pos)));
-                        curr_to_find += 1;
-                    } else { break; }
+                        to_next = true;
+                    }
+
+                    if let Some((next_contig, next_position)) = next {
+                        if gp.contig == next_contig.to_string() {
+                            if gp.start - tolerance <= *next_position && *next_position <= gp.end + tolerance {
+                                res.push(None);
+                                to_next = true;
+                            }
+                        }
+                    }
+
+                    if to_next {
+                        if let Some((c, p)) = next {
+                            (current_contig, current_pos) = (c.to_string(), *p);
+                            next = positions_iter.next();
+                        } else {
+                            break 'A;
+                        }
+                    } else {
+                        break 'B;
+                    }
                 }
-            } else if has_search_in_contig {
-                // after not found
-                res.push(None);
-                curr_to_find += 1;
-                has_search_in_contig = false;
             }
         }
+        
         res
     }
 
@@ -212,6 +232,7 @@ impl TableFile {
 
     fn get_readers(path: &str, sep: &str, position_columns: &Vec<usize>, comment: &str) -> Result<(GenomicPositions, BGZReader<File>), TRError> {
         let mut path = path.to_string();
+        println!("Loading {}", path);
 
         if let Some(r) = Path::new(&path).extension() {
             if let Some(ext) = r.to_str() {
@@ -224,7 +245,6 @@ impl TableFile {
             }
         }
 
-        println!("Loading {}", path);
         let mut reader = File::open(&path).map(BGZReader::new)?;
         let test = reader.seek(reader.virtual_position());
         let mut reader = match test {
@@ -280,20 +300,19 @@ impl TableFile {
             let mut line_buffer = String::new();
 
             let mut last_gp: Option<GenomicPosition> = None;
+            let n_chr_comment = comment.len();
 
             loop {
                 let offset = reader.virtual_position().try_into().unwrap();
 
                 match reader.read_line(&mut line_buffer) {
                     Ok(size) => {
-                        if size == 0 { break; }
-                        
-                        if &line_buffer[..1] != comment { 
+                        if size == 0 || line_buffer.len() < n_chr_comment { break; }
+                        if &line_buffer[..n_chr_comment] != comment { 
                             match gp.push_from_line(offset, &line_buffer, sep, &position_columns, 1) {
                                 Ok(gp) => {
                                     if let Some(ls) = last_gp {
                                         if ls.start > gp.start && ls.contig == gp.contig {
-
                                             eprintln!("last start {}:{}, current start {}:{}", ls.contig, ls.start, gp.contig, gp.start);
                                             return Err(TRError::NotSorted);
                                         }
@@ -327,7 +346,10 @@ impl TableFile {
 
     pub fn get_positions_lines(&mut self, positions: Vec<(String, i32)>, sep: &str, position_columns: &Vec<usize>, tolerance: i32, comment: &str) -> Result<Vec<Option<String>>, TRError> {
         let ordered = order_positions(positions, self.index.contigs_order());
+        println!("ordered {:?}", ordered);
         let positions = self.index.positions(ordered.iter().map(|(_, p)| p.clone()).collect(), tolerance);
+        println!("positions {:?}", positions);
+
         let mut dedup: HashMap<u64, (Vec<usize>, u64)> = HashMap::new();
         for (i, p) in positions.iter().enumerate() {
             if let Some((pos, max_lines)) = p {
@@ -340,8 +362,10 @@ impl TableFile {
         }
         let mut dedup = Vec::from_iter(dedup.iter());
         dedup.sort_by(|a,b| a.0.cmp(b.0));
+        println!("dedup {:?}", dedup);
 
         let mut res: Vec<(usize, Option<String>)> = ordered.iter().map(|(index, _)| (*index, None)).collect();
+        let n_chr_comment = comment.len();
 
         for (offset, (items_ids, max_lines)) in dedup.into_iter() {
             let mut line_buffer = String::new();
@@ -358,9 +382,9 @@ impl TableFile {
                 match self.reader.read_line(&mut line_buffer) {
                     Ok(code) => {
                         if code == 0 { break; } else {
-                            if n_lines == max_lines + 1 { break; }
+                            if n_lines == max_lines + 1 || line_buffer.len() < n_chr_comment { break; }
 
-                            if &line_buffer[..1] != comment {
+                            if &line_buffer[..n_chr_comment] != comment {
 
                                 let str = line_buffer
                                 .split(sep)
@@ -453,6 +477,39 @@ mod tests {
             for r in res.into_iter().zip(expected) {
                 assert_eq!(r.0, r.1);
             }
+        }
+
+        println!("{:#?}", now.elapsed());
+        
+    }
+
+    #[test]
+    fn it_works2() {
+        let now = Instant::now();
+    
+        let path = "/home/thomas/NGS/ref/hg19/gencode.v28lift37.basic.annotation.gtf.gz";
+        let sep = "\t";
+        let position_columns = vec![0, 3, 4];
+        let comment = "#";
+
+        let mut res = TableFile::new(path, sep, &position_columns, comment).unwrap();
+        let my_pos = vec![("chr14".to_string(), 19_013_295), ("chr14".to_string(), 105259757)];
+        // let my_pos = vec![("chr14".to_string(), 105259757)];
+
+        let expected = vec![
+            Some("2486\t1442\t13\t8\t38\tchr1\t249239883\t249240621\t-10000\t+\t(TTAGGG)n\tSimple_repeat\tSimple_repeat\t1\t716\t0\t3".to_string()), 
+            None,
+            Some("2486\t1442\t13\t8\t38\tchr1\t249239883\t249240621\t-10000\t+\t(TTAGGG)n\tSimple_repeat\tSimple_repeat\t1\t716\t0\t3".to_string())
+        ];
+
+        if let Ok(res) = res.get_positions_lines(my_pos.clone(), sep, &position_columns, 0, comment) {
+            for r in my_pos.into_iter().zip(&res) {
+                println!("{:?}", r.1);
+            }
+
+            // for r in res.into_iter().zip(expected) {
+            //     assert_eq!(r.0, r.1);
+            // }
         }
 
         println!("{:#?}", now.elapsed());
