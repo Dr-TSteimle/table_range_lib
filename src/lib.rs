@@ -180,15 +180,16 @@ impl GenomicPositions {
                     let mut to_next = false;
                     'B: loop {
                         if current_contig == gp.contig && gp.start - tolerance <= current_pos && current_pos <= gp.end + tolerance {
-                            // println!("MATCH {current_pos}");
                             res.push(Some((*offset, *n_pos)));
                             to_next = true;
-                        } else if let Some((next_contig, next_position)) = next {
-                            if gp.contig == next_contig.to_string() {
-                                if gp.start - tolerance <= *next_position && *next_position <= gp.end + tolerance {
+                        } else {
+                            let nextpos = positions.iter().filter(|(c,p)| c.to_string() == gp.contig && *p > current_pos).map(|(c,p)| *p).collect::<Vec<i32>>();
+                            for np in nextpos.iter() {
+                                if gp.start - tolerance <= *np && *np <= gp.end + tolerance {
                                     res.push(None);
                                     to_next = true;
-                                }
+                                    break;
+                                } 
                             }
                         }
     
@@ -411,6 +412,7 @@ impl TableFile {
                                                 let mut res_item = res.get_mut(ordered_id).unwrap();
                                                 res_item.1 = None; 
                                                 to_next = true;
+                                                break;
                                             } 
                                         }
                                         
@@ -524,7 +526,10 @@ mod tests {
         let mut res = TableFile::new(path, sep, &position_columns, comment).unwrap();
         let my_pos = vec![("chr14".to_string(), 19_013_295), ("chr14".to_string(), 105259757)];
         let my_pos = vec![
-            ("chr14".to_string(), 19_529_869),
+            ("chr14".to_string(), 19_013_295),
+            ("chr14".to_string(), 19_038_381),
+            ("chr14".to_string(), 19_494_423),
+            ("chr14".to_string(), 19_488_487),
             ("chr14".to_string(), 19_529_869),
             ("chr14".to_string(), 19_529_941),
             ("chr14".to_string(), 19_817_189),
