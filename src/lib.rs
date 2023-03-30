@@ -403,7 +403,9 @@ impl TableFile {
                                         curr_i += 1;
                                         if let Some(o_i) = items_ids.get(curr_i) {
                                             ordered_id = *o_i;
-                                            (_, (_, position)) = ordered.get(ordered_id).unwrap().clone();
+                                            if ordered.get(ordered_id).is_some() {
+                                                (_, (_, position)) = ordered.get(ordered_id).unwrap().clone();
+                                            } else { break; }
                                         } else { break; }
                                     } else { break; }
                                 }
