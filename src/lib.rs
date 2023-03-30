@@ -165,6 +165,7 @@ impl GenomicPositions {
     }
 
     fn positions(&self, positions: Vec<(String, i32)>, tolerance: i32) -> Vec<Option<(u64, u64)>> {
+        // println!("o p {:?}", positions);
         let mut res = Vec::new();
         let mut positions_iter = positions.iter();
 
@@ -179,6 +180,7 @@ impl GenomicPositions {
                     let mut to_next = false;
                     'B: loop {
                         if current_contig == gp.contig && gp.start - tolerance <= current_pos && current_pos <= gp.end + tolerance {
+                            // println!("MATCH {current_pos}");
                             res.push(Some((*offset, *n_pos)));
                             to_next = true;
                         } else if let Some((next_contig, next_position)) = next {
@@ -194,6 +196,7 @@ impl GenomicPositions {
                             if let Some((c, p)) = next {
                                 (current_contig, current_pos) = (c.to_string(), *p);
                                 next = positions_iter.next();
+                                to_next = false;
                             } else {
                                 break 'A;
                             }
@@ -458,7 +461,14 @@ mod tests {
         let comment = "#";
 
         let mut res = TableFile::new(path, sep, &position_columns, comment).unwrap();
-        let my_pos = vec![("chr14".to_string(), 22555233),("chr1".to_string(), 249_240_620), ("chr10".to_string(), 524_779_845), ("chr1".to_string(), 249_240_621)];
+        let my_pos = vec![
+            ("chr1".to_string(), 47_692_481),
+            // ("chr14".to_string(), 22555233),
+            // ("chr1".to_string(), 249_240_620),
+            // ("chr10".to_string(), 524_779_845),
+            // ("chr1".to_string(), 249_240_621),
+            ("chr1".to_string(), 23_636_654),
+        ];
 
         let expected = vec![
             None,
