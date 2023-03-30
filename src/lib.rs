@@ -175,31 +175,34 @@ impl GenomicPositions {
             let mut current_pos = *position;
 
             'A: for (offset, gp, n_pos) in self.0.iter() {
-                let mut to_next = false;
-                'B: loop {
-                    if current_contig == gp.contig && gp.start - tolerance <= current_pos && current_pos <= gp.end + tolerance {
-                        res.push(Some((*offset, *n_pos)));
-                        to_next = true;
-                    } else if let Some((next_contig, next_position)) = next {
-                        if gp.contig == next_contig.to_string() {
-                            if gp.start - tolerance <= *next_position && *next_position <= gp.end + tolerance {
-                                res.push(None);
-                                to_next = true;
+                if current_contig == gp.contig {
+                    let mut to_next = false;
+                    'B: loop {
+                        if current_contig == gp.contig && gp.start - tolerance <= current_pos && current_pos <= gp.end + tolerance {
+                            res.push(Some((*offset, *n_pos)));
+                            to_next = true;
+                        } else if let Some((next_contig, next_position)) = next {
+                            if gp.contig == next_contig.to_string() {
+                                if gp.start - tolerance <= *next_position && *next_position <= gp.end + tolerance {
+                                    res.push(None);
+                                    to_next = true;
+                                }
                             }
                         }
-                    }
-
-                    if to_next {
-                        if let Some((c, p)) = next {
-                            (current_contig, current_pos) = (c.to_string(), *p);
-                            next = positions_iter.next();
+    
+                        if to_next {
+                            if let Some((c, p)) = next {
+                                (current_contig, current_pos) = (c.to_string(), *p);
+                                next = positions_iter.next();
+                            } else {
+                                break 'A;
+                            }
                         } else {
-                            break 'A;
+                            break 'B;
                         }
-                    } else {
-                        break 'B;
                     }
                 }
+                
             }
         }
 
