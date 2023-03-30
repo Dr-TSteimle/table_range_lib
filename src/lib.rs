@@ -455,9 +455,10 @@ mod tests {
         let comment = "#";
 
         let mut res = TableFile::new(path, sep, &position_columns, comment).unwrap();
-        let my_pos = vec![("chr1".to_string(), 249_240_620), ("chr10".to_string(), 524_779_845), ("chr1".to_string(), 249_240_621)];
+        let my_pos = vec![("chr14".to_string(), 22555233),("chr1".to_string(), 249_240_620), ("chr10".to_string(), 524_779_845), ("chr1".to_string(), 249_240_621)];
 
         let expected = vec![
+            None,
             Some("2486\t1442\t13\t8\t38\tchr1\t249239883\t249240621\t-10000\t+\t(TTAGGG)n\tSimple_repeat\tSimple_repeat\t1\t716\t0\t3".to_string()), 
             None,
             Some("2486\t1442\t13\t8\t38\tchr1\t249239883\t249240621\t-10000\t+\t(TTAGGG)n\tSimple_repeat\tSimple_repeat\t1\t716\t0\t3".to_string())
