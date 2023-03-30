@@ -208,7 +208,7 @@ impl GenomicPositions {
                 
             }
         }
-        println!("res: {:?}", res);
+        // println!("res: {:?}", res);
         res
     }
 
@@ -360,7 +360,7 @@ impl TableFile {
         }
         let mut dedup = Vec::from_iter(dedup.iter());
         dedup.sort_by(|a,b| a.0.cmp(b.0));
-        println!("dedup {:?}", dedup);
+        // println!("dedup {:?}", dedup);
 
         let mut res: Vec<(usize, Option<String>)> = ordered.iter().map(|(index, _)| (*index, None)).collect();
         let n_chr_comment = comment.len();
@@ -373,31 +373,16 @@ impl TableFile {
 
             let mut ordered_id = *items_ids.get(curr_i).unwrap();
             
-            // let (_, (_, mut current_pos)) = ordered.get(ordered_id).unwrap().clone();
             let (_, (_, mut position)) = ordered.get(ordered_id).unwrap().clone();
-            let mut next_stop = if let Some(next_o_i) = items_ids.get(curr_i + 1) {
-                let (_, (_, np)) = ordered.get(*next_o_i).unwrap().clone();
-                Some(np)
-            } else {
-                None
-            };
             
-            
-            println!("look for n : {}", items_ids.len());
-            // println!("look for : {}", position);
-
             self.reader.seek(VirtualPosition::from(*offset)).unwrap();
 
             'A: loop {
                 match self.reader.read_line(&mut line_buffer) {
                     Ok(code) => {
                         if code == 0 { break; } else {
-                            if n_lines == max_lines + 1 { 
-                                println!("n lines");
-                                break; 
-                            }
+                            if n_lines == max_lines + 1 { break; }
                             
-
                             if line_buffer.len() > n_chr_comment { if &line_buffer[..n_chr_comment] != comment {
                                 let str = line_buffer
                                 .split(sep)
@@ -420,13 +405,15 @@ impl TableFile {
                                         res_item.1 = Some(line_buffer.clone().trim().to_string()); 
                                         to_next = true;
                                     } else { 
-                                        if let Some(next_pos) = next_stop {
-                                            if start - tolerance <= next_pos && next_pos <= stop + tolerance {
+                                        let nextpos = items_ids.iter().enumerate().filter(|(i,_)| *i > curr_i).map(|(_,e)| ordered.get(*e).unwrap().clone().1.1.to_owned()).collect::<Vec<i32>>();
+                                        for np in nextpos.iter() {
+                                            if start - tolerance <= *np && *np <= stop + tolerance {
                                                 let mut res_item = res.get_mut(ordered_id).unwrap();
                                                 res_item.1 = None; 
                                                 to_next = true;
                                             } 
                                         }
+                                        
                                     }
 
                                     if to_next {
@@ -437,23 +424,13 @@ impl TableFile {
                                             ordered_id = *o_i;
                                             if ordered.get(ordered_id).is_some() {
                                                 (_, (_, position)) = ordered.get(ordered_id).unwrap().clone();
-                                                next_stop = if let Some(next_o_i) = items_ids.get(curr_i + 1) {
-                                                    let (_, (_, np)) = ordered.get(*next_o_i).unwrap().clone();
-                                                    Some(np)
-                                                } else {
-                                                    None
-                                                };
                                             } else { break 'B; }
                                         } else { break 'A; }
                                     } else {
                                         break 'B;
                                     }
-                                }
-
-
-                                
+                                }                                
                             }
-                            
                             line_buffer.clear();
                         }}
                     },
@@ -546,8 +523,9 @@ mod tests {
 
         let mut res = TableFile::new(path, sep, &position_columns, comment).unwrap();
         let my_pos = vec![("chr14".to_string(), 19_013_295), ("chr14".to_string(), 105259757)];
-
         let my_pos = vec![
+            ("chr14".to_string(), 19_529_869),
+            ("chr14".to_string(), 19_529_869),
             ("chr14".to_string(), 19_529_941),
             ("chr14".to_string(), 19_817_189),
         ];
