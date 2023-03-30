@@ -338,9 +338,9 @@ impl TableFile {
 
     pub fn get_positions_lines(&mut self, positions: Vec<(String, i32)>, sep: &str, position_columns: &Vec<usize>, tolerance: i32, comment: &str) -> Result<Vec<Option<String>>, TRError> {
         let ordered = order_positions(positions, self.index.contigs_order());
-        println!("ordered {:?}", ordered);
+        // println!("ordered {:?}", ordered);
         let positions = self.index.positions(ordered.iter().map(|(_, p)| p.clone()).collect(), tolerance);
-        println!("positions {:?}", positions);
+        // println!("positions {:?}", positions);
 
         let mut dedup: HashMap<u64, (Vec<usize>, u64)> = HashMap::new();
         for (i, p) in positions.iter().enumerate() {
@@ -354,7 +354,7 @@ impl TableFile {
         }
         let mut dedup = Vec::from_iter(dedup.iter());
         dedup.sort_by(|a,b| a.0.cmp(b.0));
-        println!("dedup {:?}", dedup);
+        // println!("dedup {:?}", dedup);
 
         let mut res: Vec<(usize, Option<String>)> = ordered.iter().map(|(index, _)| (*index, None)).collect();
         let n_chr_comment = comment.len();
