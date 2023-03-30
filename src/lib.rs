@@ -166,15 +166,12 @@ impl GenomicPositions {
 
     fn positions(&self, positions: Vec<(String, i32)>, tolerance: i32) -> Vec<Option<(u64, u64)>> {
         let mut res = Vec::new();
-        let mut curr_to_find = 0;
-        let len_positions = positions.len();
         println!("positions {:?}", positions);
-
-        let mut cid = 0;
+        
         let mut positions_iter = positions.iter();
-        let mut current_contig = "".to_string();
+        
 
-        let (mut current, mut next) = (positions_iter.next(), positions_iter.next());
+        let (current, mut next) = (positions_iter.next(), positions_iter.next());
         
         if let Some((contig, position)) = current {
             let mut current_contig = contig.to_string();
@@ -210,7 +207,7 @@ impl GenomicPositions {
                 }
             }
         }
-        
+
         res
     }
 
@@ -494,6 +491,7 @@ mod tests {
 
         let mut res = TableFile::new(path, sep, &position_columns, comment).unwrap();
         let my_pos = vec![("chr14".to_string(), 19_013_295), ("chr14".to_string(), 105259757)];
+        
         // let my_pos = vec![("chr14".to_string(), 105259757)];
 
         let expected = vec![
