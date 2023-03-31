@@ -1,11 +1,12 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, BTreeSet},
     fs::{File, rename},
     io::{BufRead, copy, ErrorKind, Write, BufReader},
     fmt::Debug,
     num::{ParseIntError, NonZeroUsize},
     path::Path
 };
+
 
 use flate2::read::GzDecoder;
 use noodles::bgzf::{VirtualPosition, Reader as BGZReader, MultithreadedWriter};
@@ -77,6 +78,181 @@ impl GenomicPosition {
             end   : str[2].trim().parse()?,
         })
     }
+}
+use btree_range_map::{RangeMap};
+use range_map::RangeMultiMap;
+
+struct RangesIndex(HashMap<String, RangeMap<i32, (u64, u64)>>);
+
+impl RangesIndex {
+    fn new_from_file(path: &str, sep: &str) -> Result<RangesIndex, TRError> {
+        let mut res = RangesIndex(HashMap::new());
+        let mut reader = std::io::BufReader::new(File::open(&path)?);
+
+        let mut n_line = 1;
+        let mut line_buffer = String::new();
+        let mut current_contig = "".to_string();
+        let mut current_btree: RangeMap<i32, (u64, u64)> = RangeMap::new();
+        loop {
+            let line = reader.read_line(&mut line_buffer)?;
+            if line == 0 {break;}
+
+            let cols = line_buffer.split(sep).collect::<Vec<&str>>();
+            if let (Ok(pos) , Ok(start), Ok(end), Ok(n_lines)) = (cols[0].trim().parse(), cols[2].trim().parse(), cols[3].trim().parse(), cols[4].trim().parse()) {
+                if cols[1] != current_contig {
+                    if current_btree.len() > 0 {
+                        res.0.insert(current_contig, current_btree);
+                        current_contig = cols[1].to_string();
+                        current_btree = RangeMap::new();
+                    }
+                }
+
+                current_btree.insert(start..=end, (pos, n_lines));
+            } else {
+                eprintln!("Error parsing index line: {} {:?}", n_line, cols);
+                break;
+            }
+
+            line_buffer.clear();
+
+            if n_line % 100_000 == 0 {
+                println!("{} parsed", n_line);
+            }
+            n_line += 1;
+        }
+
+        if !current_btree.is_empty() {
+            res.0.insert(current_contig, current_btree);
+        }
+        println!("Index parsed {} ranges.", n_line);
+
+        Ok(res)
+    }
+
+    fn stats_all(&self) {
+        let mut n_contigs = 0;
+        let mut total_ranges = 0;
+        self.0.iter().for_each(|(contig, contig_btree)| {
+            let n_ranges = contig_btree.range_count();
+            println!("contig: {} (n = {})", contig, n_ranges);
+            total_ranges += n_ranges;
+            n_contigs += 1;
+        });
+        println!("n contigs = {}, n ranges = {}", n_contigs, total_ranges);
+    }
+
+    fn stats(&self) -> (usize, usize) {
+        let mut n_contigs = 0;
+        let mut total_ranges = 0;
+        self.0.iter().for_each(|(contig, contig_btree)| {
+            let n_ranges = contig_btree.range_count();
+            total_ranges += n_ranges;
+            n_contigs += 1;
+        });
+        (n_contigs, total_ranges)
+    }
+
+}
+
+#[derive(Debug)]
+struct QueryPositions {
+    input: Vec<(String, i32)>,
+    sorted: HashMap<String, Vec<usize>>,
+    offsets: HashMap<String, Vec<Option<(u64, u64)>>>
+}
+
+impl QueryPositions {
+    fn new(input: Vec<(String, i32)>) -> QueryPositions {
+        let mut res = QueryPositions { input, sorted: HashMap::new(), offsets: HashMap::new() };
+
+        for (i, (c, _)) in res.input.iter().enumerate() {
+            if let Some(v) = res.sorted.get_mut(c) {
+                v.push(i);
+            } else {
+                res.sorted.insert(c.to_string(), vec![i]);
+            }
+        }
+
+        for (_,v) in res.sorted.iter_mut() {
+            v.sort_by(|a,b| {
+                let (_, av) = res.input.get(*a).unwrap();
+                let (_, bv) = res.input.get(*b).unwrap();
+                av.cmp(bv)
+            });
+        }
+
+        for (c, _) in res.sorted.iter() {
+            res.offsets.insert(c.to_string(), vec![]);
+        } 
+        res
+    }
+
+    fn get_sorted(&self) -> Vec<&(String, i32)> {
+        let mut res = Vec::new();
+        for (c, v) in self.sorted.iter() {
+            for id in v.iter() {
+                res.push(self.input.get(*id).unwrap())
+            }
+        }
+        res
+    }
+
+    fn find_offsets(&mut self, range_index: &RangesIndex) {
+        for (contig, v) in self.sorted.iter() {
+            let current_offsets = self.offsets.get_mut(contig).unwrap();
+            
+            if let Some(current_btree) = range_index.0.get(contig) {
+                for id in v.iter() {
+                    let (_, pos) = self.input.get(*id).unwrap();
+
+                    if let Some(offset) = current_btree.get(*pos) {
+                        current_offsets.push(Some(*offset));
+                    } else {
+                        current_offsets.push(None);
+                    }
+                }
+            } else {
+                for _ in v.iter() {
+                    current_offsets.push(None);
+                }
+            }
+        }
+    }
+
+    fn parse_data(&self, table_file: &mut TableFile, sep: &str, position_columns: &Vec<usize>, tolerance: i32, comment: &str) {
+        // let mut current_offset = 0;
+        let mut res: HashMap<usize, String> = HashMap::new();
+
+        for (contig, offsets) in self.offsets.iter() {
+            let current_contig_sort = self.sorted.get(contig).unwrap();
+            let mut by_offsets: HashMap<u64, (u64, Vec<(usize, i32)>)> = HashMap::new();
+
+            // all offsets in current contig
+            for (id, opt_offset) in current_contig_sort.iter().zip(offsets) {
+                if let Some((offset, n_lines)) = opt_offset {
+                    if let Some((_, bf)) = by_offsets.get_mut(offset) {
+                        bf.push((*id, self.input.get(*id).unwrap().1))
+                    } else {
+                        by_offsets.insert(*offset, (*n_lines, vec![(*id, self.input.get(*id).unwrap().1)]));
+                    }
+                }
+            }
+
+            println!("{:?}", by_offsets);
+
+            for (offset, (max_lines, positions)) in by_offsets.iter() {
+                let rmm = table_file.parse_offsets(*offset, *max_lines, sep, position_columns, tolerance, comment).unwrap();
+                let grouped = rmm.group();
+                for (id, pos) in positions.into_iter() {
+                    if let Some(r) = grouped.get(*pos) {
+                        res.insert(*id, r.join(";;").to_string());
+                    }                                 }
+            }
+
+            println!("{:?}", res);
+        }
+    }
+    
 }
 
 struct  GenomicPositions(Vec<(u64, GenomicPosition, u64)>);
@@ -180,16 +356,23 @@ impl GenomicPositions {
                     let mut to_next = false;
                     'B: loop {
                         if current_contig == gp.contig && gp.start - tolerance <= current_pos && current_pos <= gp.end + tolerance {
+                            // println!("MATCH {current_pos}");
                             res.push(Some((*offset, *n_pos)));
                             to_next = true;
-                        } else {
-                            let nextpos = positions.iter().filter(|(c,p)| c.to_string() == gp.contig && *p > current_pos).map(|(c,p)| *p).collect::<Vec<i32>>();
-                            for np in nextpos.iter() {
-                                if gp.start - tolerance <= *np && *np <= gp.end + tolerance {
+                        } else if let Some((next_contig, next_position)) = next {
+                            // let nextpos = positions.iter().filter(|(c,p)| c.to_string() == gp.contig && *p > current_pos).map(|(c,p)| *p).collect::<Vec<i32>>();
+                            // for np in nextpos.iter() {
+                            //     if gp.start - tolerance <= *np && *np <= gp.end + tolerance {
+                            //         res.push(None);
+                            //         to_next = true;
+                            //         break;
+                            //     } 
+                            // }
+                            if gp.contig == next_contig.to_string() {
+                                if gp.start - tolerance <= *next_position  {
                                     res.push(None);
                                     to_next = true;
-                                    break;
-                                } 
+                                }
                             }
                         }
     
@@ -347,7 +530,7 @@ impl TableFile {
         let ordered = order_positions(positions, self.index.contigs_order());
         // println!("ordered {:?}", ordered);
         let positions = self.index.positions(ordered.iter().map(|(_, p)| p.clone()).collect(), tolerance);
-        // println!("positions {:?}", positions);
+        println!("positions {:?}", positions);
 
         let mut dedup: HashMap<u64, (Vec<usize>, u64)> = HashMap::new();
         for (i, p) in positions.iter().enumerate() {
@@ -361,7 +544,7 @@ impl TableFile {
         }
         let mut dedup = Vec::from_iter(dedup.iter());
         dedup.sort_by(|a,b| a.0.cmp(b.0));
-        // println!("dedup {:?}", dedup);
+        println!("dedup {:?}", dedup);
 
         let mut res: Vec<(usize, Option<String>)> = ordered.iter().map(|(index, _)| (*index, None)).collect();
         let n_chr_comment = comment.len();
@@ -445,9 +628,69 @@ impl TableFile {
         res.sort_by(|a, b| a.0.cmp(&b.0));
         Ok(res.iter().map(|(_,a)| a.clone()).collect())
     }
+
+    fn parse_offsets(&mut self, offset: u64, max_lines: u64, sep: &str, position_columns: &Vec<usize>, tolerance: i32, comment: &str) -> Result<RangeMultiMap<i32, String>, TRError> {
+        let n_chr_comment = comment.len();
+        let mut n_lines = 0;
+        
+        // let mut res: RangeMultiMap<i32, BTreeSet<String>> = RangeMultiMap::new();
+        
+        let mut res = range_map::RangeMultiMap::new();
+        
+        self.reader.seek(VirtualPosition::from(offset)).unwrap();
+        
+        loop {
+            let mut line_buffer = String::new();
+            match self.reader.read_line(&mut line_buffer) {
+                Ok(code) => {
+                    if n_lines == max_lines + 1 { break; }
+                    if code == 0 { break; }
+                    if line_buffer.len() <= n_chr_comment { continue; } else {
+                        if &line_buffer[..n_chr_comment] != comment { continue; }
+                    }
+
+                    let str = line_buffer
+                        .split(sep)
+                        .enumerate()
+                        .filter(|(i, _)| position_columns.contains(i))
+                        .map(|(_,e)| e.to_owned())
+                        .collect::<Vec<String>>();
+
+                    if str.len() != 3 { return Err(TRError::ColumnsNotFound) }
+
+                    let (start, stop) = (str[1].trim().parse::<i32>()?, str[2].trim().parse::<i32>()?);
+                    
+                    res.insert(range_map::Range::new(start - tolerance, stop + tolerance), line_buffer);
+                },
+                Err(_) => panic!("Error parsing file"),
+            }
+            n_lines += 1;
+        }
+        Ok(res)
+    }
 }
 
 fn order_positions (input: Vec<(String, i32)>, contigs_order: Vec<String>) -> Vec<(usize, (String, i32))> {
+    let mut input: Vec<(usize, (String, i32))> = input.into_iter().enumerate().collect();
+    input.sort_by(|(_, (a_contig, a_pos)), (_, (b_contig, b_pos))| {
+        if a_contig != b_contig {
+            for c in contigs_order.iter() {
+                if c == a_contig {
+                    return std::cmp::Ordering::Less
+                } else if c == b_contig {
+                    return std::cmp::Ordering::Greater
+                }
+            }
+            std::cmp::Ordering::Greater
+        } else {
+            a_pos.cmp(b_pos)
+        }
+    });
+
+    input
+}
+
+fn sort_positions (input: Vec<(String, i32)>, contigs_order: Vec<String>) -> Vec<(usize, (String, i32))> {
     let mut input: Vec<(usize, (String, i32))> = input.into_iter().enumerate().collect();
     input.sort_by(|(_, (a_contig, a_pos)), (_, (b_contig, b_pos))| {
         if a_contig != b_contig {
@@ -555,6 +798,58 @@ mod tests {
 
         println!("{:#?}", now.elapsed());
         
+    }
+
+
+    #[test]
+    fn loading() -> Result<(), TRError> {        
+        let path = "/home/thomas/NGS/ref/hg19/rmsk.txt.gz.id";
+        let sep = "\t";
+        let position_columns = vec![5, 6, 7];
+        let comment = "#";
+        let tolerance = 0;
+
+        let my_pos = vec![
+            ("chr1".to_string(), 47_692_481),
+            ("chr14".to_string(), 22555233),
+            ("chr1".to_string(), 249_240_620),
+            ("chr10".to_string(), 524_779_845),
+            ("chr1".to_string(), 249_240_621),
+            ("chr1".to_string(), 23_636_654),
+            ("chr1".to_string(), 23_636_654),
+        ];
+
+        let mut qp = QueryPositions::new(my_pos.clone());
+        println!("{:?}", qp.sorted);
+
+        println!("{:?}", qp.get_sorted());
+
+        let now = Instant::now();
+        let ri = RangesIndex::new_from_file(path, sep)?;
+        let st = ri.stats();
+        println!("Postions n = {}", st.1);
+        println!("RangesIndex loading in {:#?}", now.elapsed());
+        // let r = ri.intersect(&my_pos[1].0, my_pos[1].1);
+
+        let r = qp.find_offsets(&ri);
+
+        let mut readers = TableFile::new("/home/thomas/NGS/ref/hg19/rmsk.txt.gz", sep, &position_columns, comment).unwrap();
+        qp.parse_data(&mut readers, sep, &position_columns, tolerance, comment);
+
+
+        println!("{:?}", qp.offsets);
+        println!("RangesIndex lookup in {:#?}", now.elapsed());
+
+        // let now = Instant::now();
+        // let gp = GenomicPositions::new_from_index(path, sep)?;
+        // println!("Postions n = {}", gp.0.len());
+        // println!("GenomicPositions loading in {:#?}", now.elapsed());
+        
+        // // let r = ri.intersect(&my_pos[1].0, my_pos[1].1);
+        // println!("{:?}", r);
+        // println!("GenomicPositions lookup in {:#?}", now.elapsed());
+
+        Ok(())
     }
     
 }
