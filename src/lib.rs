@@ -9,9 +9,9 @@ use noodles_tabix as tabix;
 use tabix::Index;
 use rangemap::RangeInclusiveMap;
 
-fn parse_record(s: &str, separator: char, columns_positions: Vec<usize>) -> io::Result<(&str, i32, i32)> {
+fn parse_record(s: &str, separator: String, columns_positions: Vec<usize>) -> io::Result<(&str, i32, i32)> {
     let components = s
-    .split(separator)
+    .split(&separator)
     .collect::<Vec<&str>>();
         
     let components = components.into_iter()
@@ -45,7 +45,7 @@ fn parse_record(s: &str, separator: char, columns_positions: Vec<usize>) -> io::
     Ok((reference_sequence_name, start, end))
 }
 
-pub fn get_readers(path: &str, seperator: char, columns_positions: Vec<usize>, comment: &str) -> io::Result<(tabix::Index, bgzf::Reader<File>)> {
+pub fn get_readers(path: &str, seperator: String, columns_positions: Vec<usize>, comment: &str) -> io::Result<(tabix::Index, bgzf::Reader<File>)> {
     let mut path = path.to_string();
     println!("Loading {}", path);
 
@@ -134,7 +134,7 @@ pub fn get_readers(path: &str, seperator: char, columns_positions: Vec<usize>, c
                 if &buf[..n_chr_comment] == comment { continue; }
             }
 
-            let (reference_sequence_name, start, end) = parse_record(buf.trim_end(), seperator, columns_positions.to_vec())?;
+            let (reference_sequence_name, start, end) = parse_record(buf.trim_end(), seperator.to_string(), columns_positions.to_vec())?;
             indexer.add_record(reference_sequence_name, Position::new(start as usize).unwrap(), Position::new(end as usize).unwrap(), chunk);
 
             start_position = end_position;
@@ -149,7 +149,7 @@ pub fn get_readers(path: &str, seperator: char, columns_positions: Vec<usize>, c
     Ok((index, reader))
 }
 
-pub fn get_position(start: usize, index: Index, reader: &mut bgzf::Reader<File>, separator: char, columns_positions: Vec<usize>) -> RangeInclusiveMap::<i32, String> {
+pub fn get_position(start: usize, index: Index, reader: &mut bgzf::Reader<File>, separator: String, columns_positions: Vec<usize>) -> RangeInclusiveMap::<i32, String> {
     let pos = Interval::from(RangeInclusive::new(
         Position::new(start).unwrap(),
         Position::new(start + 1).unwrap()
@@ -165,7 +165,7 @@ pub fn get_position(start: usize, index: Index, reader: &mut bgzf::Reader<File>,
 
             if reader.read_line(&mut buf).unwrap() == 0 { break; }
 
-            let (_reference_name, start, end) = parse_record(&buf, separator, columns_positions.to_vec()).unwrap();
+            let (_reference_name, start, end) = parse_record(&buf, separator.to_string(), columns_positions.to_vec()).unwrap();
             rangemap.insert(start..=end, buf.clone());
 
             if reader.virtual_position() == chunk.end() { break; }
@@ -182,14 +182,14 @@ pub struct TableFile {
 
 pub struct TableFileOpts {
     pub path: String,
-    pub separator: char,
+    pub separator: String,
     pub comment  : String,
     pub position_columns: Vec<usize>,
     pub tolerance: i32,
 }
 
 impl TableFileOpts {
-    pub fn new(path: String, separator: char, comment: &str, position_columns: Vec<usize>, tolerance: i32) -> TableFileOpts {
+    pub fn new(path: String, separator: String, comment: &str, position_columns: Vec<usize>, tolerance: i32) -> TableFileOpts {
         TableFileOpts {
             path: path.to_string(),
             separator,
@@ -202,7 +202,7 @@ impl TableFileOpts {
 
 impl TableFile {
     pub fn open(options: TableFileOpts) -> io::Result<TableFile> {
-        let (index, reader) = get_readers(&options.path, options.separator, options.position_columns.to_vec(), &options.comment)?;
+        let (index, reader) = get_readers(&options.path, options.separator.to_string(), options.position_columns.to_vec(), &options.comment)?;
         Ok(TableFile { reader, index, options })
     }
 
@@ -243,7 +243,7 @@ impl TableFile {
         
                     if self.reader.read_line(&mut buf).unwrap() == 0 { break; }
         
-                    let (_reference_name, start, end) = parse_record(&buf, self.options.separator, self.options.position_columns.to_vec()).unwrap();
+                    let (_reference_name, start, end) = parse_record(&buf, self.options.separator.to_string(), self.options.position_columns.to_vec()).unwrap();
                     inc_map.insert((start - self.options.tolerance)..=(end +  self.options.tolerance), buf.clone());
         
                     if self.reader.virtual_position() == chunk.end() { break; }
@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let options = TableFileOpts::new("/home/thomas/NGS/ref/hg19/rmsk.txt.gz".to_string(), '\t', "#", vec![5, 6, 7], 0);
+        let options = TableFileOpts::new("/home/thomas/NGS/ref/hg19/rmsk.txt.gz".to_string(), '\t'.to_string(), "#", vec![5, 6, 7], 0);
         
         let my_pos = vec![
             ("chr1".to_string(), 249_239_882),
@@ -302,7 +302,7 @@ mod tests {
 
     #[test]
     fn it_works2() {
-        let options = TableFileOpts::new("/home/thomas/NGS/ref/hg19/gencode.v28lift37.basic.annotation.gtf.gz".to_string(), '\t', "#", vec![0, 3, 4], 0);
+        let options = TableFileOpts::new("/home/thomas/NGS/ref/hg19/gencode.v28lift37.basic.annotation.gtf.gz".to_string(), '\t'.to_string(), "#", vec![0, 3, 4], 0);
         
         let my_pos = vec![
             ("chr14".to_string(), 19_013_295),
