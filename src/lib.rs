@@ -184,16 +184,18 @@ pub struct TableFileOpts {
     pub path: String,
     pub separator: char,
     pub comment  : String,
-    pub position_columns: Vec<usize>
+    pub position_columns: Vec<usize>,
+    pub tolerance: i32,
 }
 
 impl TableFileOpts {
-    pub fn new(path: &str, separator: char, comment: &str, position_columns: Vec<usize>) -> TableFileOpts {
+    pub fn new(path: &str, separator: char, comment: &str, position_columns: Vec<usize>, tolerance: i32) -> TableFileOpts {
         TableFileOpts {
             path: path.to_string(),
             separator,
             comment: comment.to_string(),
             position_columns,
+            tolerance
         }
     }
 }
@@ -242,7 +244,7 @@ impl TableFile {
                     if self.reader.read_line(&mut buf).unwrap() == 0 { break; }
         
                     let (_reference_name, start, end) = parse_record(&buf, self.options.separator, self.options.position_columns.to_vec()).unwrap();
-                    inc_map.insert(start..=end, buf.clone());
+                    inc_map.insert((start - self.options.tolerance)..=(end +  self.options.tolerance), buf.clone());
         
                     if self.reader.virtual_position() == chunk.end() { break; }
                 }
@@ -279,7 +281,7 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let options = TableFileOpts::new("/home/thomas/NGS/ref/hg19/rmsk.txt.gz", '\t', "#", vec![5, 6, 7]);
+        let options = TableFileOpts::new("/home/thomas/NGS/ref/hg19/rmsk.txt.gz", '\t', "#", vec![5, 6, 7], 0);
         
         let my_pos = vec![
             ("chr1".to_string(), 249_239_882),
@@ -300,7 +302,7 @@ mod tests {
 
     #[test]
     fn it_works2() {
-        let options = TableFileOpts::new("/home/thomas/NGS/ref/hg19/gencode.v28lift37.basic.annotation.gtf.gz", '\t', "#", vec![0, 3, 4]);
+        let options = TableFileOpts::new("/home/thomas/NGS/ref/hg19/gencode.v28lift37.basic.annotation.gtf.gz", '\t', "#", vec![0, 3, 4], 0);
         
         let my_pos = vec![
             ("chr14".to_string(), 19_013_295),
