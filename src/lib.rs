@@ -238,19 +238,25 @@ impl QueryPositions {
                 }
             }
 
-            println!("{:?}", by_offsets);
+            println!("by_offsets {:?}", by_offsets);
 
             for (offset, (max_lines, positions)) in by_offsets.iter() {
-                let rmm = table_file.parse_offsets(*offset, *max_lines, sep, position_columns, tolerance, comment).unwrap();
-                let grouped = rmm.group();
-                for (id, pos) in positions.into_iter() {
-                    if let Some(r) = grouped.get(*pos) {
-                        res.insert(*id, r.join(";;").to_string());
-                    }                                 }
-            }
+                if positions.len() > 0 {
+                    println!("{:?}", positions);
+                    let rmm = table_file.parse_offsets(*offset, *max_lines, sep, position_columns, tolerance, comment).unwrap();
+                    // let grouped = rmm.group();
+                    // for (id, pos) in positions.into_iter() {
+                    //     if let Some(r) = grouped.get(*pos) {
+                    //         res.insert(*id, r.join(";;").to_string());
+                    //     }
+                    // }
 
-            println!("{:?}", res);
+                }
+            }
+    
         }
+        println!("res {:?}", res);
+
     }
     
 }
@@ -837,7 +843,7 @@ mod tests {
         qp.parse_data(&mut readers, sep, &position_columns, tolerance, comment);
 
 
-        println!("{:?}", qp.offsets);
+        // println!("{:?}", qp.offsets);
         println!("RangesIndex lookup in {:#?}", now.elapsed());
 
         // let now = Instant::now();
