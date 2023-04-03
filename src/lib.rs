@@ -189,7 +189,7 @@ pub struct TableFileOpts {
 }
 
 impl TableFileOpts {
-    pub fn new(path: &str, separator: char, comment: &str, position_columns: Vec<usize>, tolerance: i32) -> TableFileOpts {
+    pub fn new(path: String, separator: char, comment: &str, position_columns: Vec<usize>, tolerance: i32) -> TableFileOpts {
         TableFileOpts {
             path: path.to_string(),
             separator,
@@ -281,7 +281,7 @@ mod tests {
 
     #[test]
     fn it_works() {
-        let options = TableFileOpts::new("/home/thomas/NGS/ref/hg19/rmsk.txt.gz", '\t', "#", vec![5, 6, 7], 0);
+        let options = TableFileOpts::new("/home/thomas/NGS/ref/hg19/rmsk.txt.gz".to_string(), '\t', "#", vec![5, 6, 7], 0);
         
         let my_pos = vec![
             ("chr1".to_string(), 249_239_882),
@@ -302,7 +302,7 @@ mod tests {
 
     #[test]
     fn it_works2() {
-        let options = TableFileOpts::new("/home/thomas/NGS/ref/hg19/gencode.v28lift37.basic.annotation.gtf.gz", '\t', "#", vec![0, 3, 4], 0);
+        let options = TableFileOpts::new("/home/thomas/NGS/ref/hg19/gencode.v28lift37.basic.annotation.gtf.gz".to_string(), '\t', "#", vec![0, 3, 4], 0);
         
         let my_pos = vec![
             ("chr14".to_string(), 19_013_295),
