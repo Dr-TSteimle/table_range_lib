@@ -355,7 +355,7 @@ mod tests {
         
         let now = Instant::now();
         let mut table_file = TableFile::open(options.clone()).unwrap();
-        let res = table_file.get_positions(all_pos.clone()).unwrap();
+        let _res = table_file.get_positions(all_pos.clone()).unwrap();
         println!("{}ms", now.elapsed().as_millis());
 
         let now = Instant::now();
