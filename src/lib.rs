@@ -8,6 +8,7 @@ use noodles_csi::{index::reference_sequence::bin::Chunk, BinningIndex};
 use noodles_tabix as tabix;
 use tabix::Index;
 use rangemap::RangeInclusiveMap;
+use rayon::prelude::*;
 
 fn parse_record(s: &str, separator: String, columns_positions: Vec<usize>) -> io::Result<(&str, i32, i32)> {
     let components = s
@@ -180,6 +181,7 @@ pub struct TableFile {
     pub options: TableFileOpts
 }
 
+#[derive(Clone)]
 pub struct TableFileOpts {
     pub path: String,
     pub separator: String,
@@ -212,6 +214,7 @@ impl TableFile {
             if let Some(ci) = self.get_reference_id(&c) { (i, Some((ci, p))) } else { (i, None) }}
         ).collect();
 
+        // group positions (values) by reference name (key) in an Hashmap
         let mut by_ref: HashMap<usize, Vec<(usize, i32)>> = HashMap::new();
         for (id, cp) in positions_id.iter() {
             if let Some((c, p)) = cp {
@@ -224,16 +227,19 @@ impl TableFile {
         }
 
         let mut positions_acc: Vec<Option<Vec<String>>> = vec![None; pos_len];
+        // for each ref
         for (ci, mut positions) in by_ref.into_iter() {
             positions.sort_by(|a, b| a.1.cmp(&b.1));
             
             let mut chunks: Vec<Chunk> = Vec::new();
+            // for each position of the ref retrieve corresponding chunks
             for (_, position) in positions.iter() {
                 let position = Position::try_from(*position as usize).unwrap();
                 let interval = position..=position;
                 chunks.extend(self.index.query(ci, interval).unwrap());
             }
 
+            // read and parse lines of chunk and add to RangeInclusiveMap
             let mut inc_map = RangeInclusiveMap::new();
             for chunk in chunks.iter() {
                 let _ = self.reader.seek(chunk.start());
@@ -250,6 +256,7 @@ impl TableFile {
                 }
             }
 
+            // for each positions retieve overlapping intervals contained in RangeInclusiveMap
             for (id, p) in positions.iter() {
                 let interval = *p..=*p;
                 let r: Vec<String> = inc_map
@@ -274,16 +281,37 @@ impl TableFile {
     }
 }
 
+pub fn positions_par(positions: Vec<(String, i32)>, options: TableFileOpts, chunk_size: usize) -> Vec<Option<Vec<String>>> {
+    let positions: Vec<(usize, (String, i32))> = positions.into_iter().enumerate().collect();
+    let mut res: Vec<(usize, Option<Vec<String>>)> = positions
+        .par_chunks(chunk_size)
+        .flat_map(|positions| {
+            let mut table_file = TableFile::open(options.clone()).unwrap();
+            let res = table_file.get_positions(positions.into_iter().map(|(_, (c, p))| (c.to_string(), *p)).collect()).unwrap();
+            let res: Vec<(usize, Option<Vec<String>>)> = res.iter().zip(positions.iter()).map(|(r,(id, _))| (*id, r.clone())).collect();
+            res
+        })
+        .collect();
+    res.sort_by(|a, b| a.0.cmp(&b.0));
+    res.into_iter().map(|(_, e)| e).collect()
+}
 
 #[cfg(test)]
 mod tests {
+    use std::time::Instant;
     use super::*;
 
     #[test]
     fn it_works() {
-        let options = TableFileOpts::new("/home/thomas/NGS/ref/hg19/rmsk.txt.gz".to_string(), '\t'.to_string(), "#", vec![5, 6, 7], 0);
+        let options = TableFileOpts::new(
+            "data/rmsk.txt.gz".to_string(),
+            '\t'.to_string(),
+            "#",
+            vec![5, 6, 7],
+            0
+        );
         
-        let my_pos = vec![
+        let pos = vec![
             ("chr1".to_string(), 249_239_882),
             ("chr1".to_string(), 47_692_481),
             ("chr14".to_string(), 22_555_233),
@@ -293,18 +321,25 @@ mod tests {
             ("chr1".to_string(), 249_240_621),
             ("chr1".to_string(), 23_636_654),
         ];
-            
-        let mut table_file = TableFile::open(options).unwrap();
-        let res = table_file.get_positions(my_pos);
+        let all_pos: Vec<(String, i32)> = pos.into_iter().cycle().take(1000).collect();
+        
+        let now = Instant::now();
+        let mut table_file = TableFile::open(options.clone()).unwrap();
+        let _res = table_file.get_positions(all_pos.clone()).unwrap();
+        println!("{}ms", now.elapsed().as_millis());
 
-        res.iter().for_each(|e| println!("{:?}", e));
+        let now = Instant::now();
+        let _res = positions_par(all_pos, options, 200);
+        println!("par {}ms", now.elapsed().as_millis());
+        
+        // res.iter().for_each(|e| println!("{:?}", e));
     }
 
     #[test]
     fn it_works2() {
         let options = TableFileOpts::new("/home/thomas/NGS/ref/hg19/gencode.v28lift37.basic.annotation.gtf.gz".to_string(), '\t'.to_string(), "#", vec![0, 3, 4], 0);
         
-        let my_pos = vec![
+        let pos = vec![
             ("chr14".to_string(), 19_013_295),
             ("chr14".to_string(), 19_038_381),
             ("chr14".to_string(), 19_494_423),
@@ -313,10 +348,17 @@ mod tests {
             ("chr14".to_string(), 19_529_941),
             ("chr14".to_string(), 19_817_189),
         ];
-            
-        let mut table_file = TableFile::open(options).unwrap();
-        let res = table_file.get_positions(my_pos).unwrap();
+        let all_pos: Vec<(String, i32)> = pos.into_iter().cycle().take(1000).collect();
+        
+        let now = Instant::now();
+        let mut table_file = TableFile::open(options.clone()).unwrap();
+        let res = table_file.get_positions(all_pos.clone()).unwrap();
+        println!("{}ms", now.elapsed().as_millis());
 
-        res.iter().for_each(|e| println!("-> {:?}", e));
+        let now = Instant::now();
+        let res = positions_par(all_pos.clone(), options.clone(), 200);
+        println!("par {}ms, n = {}", now.elapsed().as_millis(), res.len());
+
+        // res.iter().for_each(|e| println!("-> {:?}", e));
     }
 }

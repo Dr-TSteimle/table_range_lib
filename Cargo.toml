@@ -12,4 +12,5 @@ noodles-core = "0.11.0"
 noodles-csi = "0.14.0"
 noodles-tabix = "0.17.0"
 rangemap = "1.3.0"
+rayon = "1.7.0"
 
