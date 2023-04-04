@@ -284,7 +284,7 @@ impl TableFile {
 pub fn positions_par(positions: Vec<(String, i32)>, options: TableFileOpts, chunk_size: usize) -> io::Result<Vec<Option<Vec<String>>>> {
     let positions: Vec<(usize, (String, i32))> = positions.into_iter().enumerate().collect();
     type ItemVec = (usize, Option<Vec<String>>);
-    let mut res: Vec<(usize, Option<Vec<String>>)> = positions
+    let mut res: Vec<ItemVec> = positions
         .par_chunks(chunk_size)
         .map(|positions| -> io::Result<Vec<ItemVec>> {
             let mut table_file = TableFile::open(options.clone())?;
