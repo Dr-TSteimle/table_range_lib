@@ -281,19 +281,22 @@ impl TableFile {
     }
 }
 
-pub fn positions_par(positions: Vec<(String, i32)>, options: TableFileOpts, chunk_size: usize) -> Vec<Option<Vec<String>>> {
+pub fn positions_par(positions: Vec<(String, i32)>, options: TableFileOpts, chunk_size: usize) -> io::Result<Vec<Option<Vec<String>>>> {
     let positions: Vec<(usize, (String, i32))> = positions.into_iter().enumerate().collect();
+    type ItemVec = (usize, Option<Vec<String>>);
     let mut res: Vec<(usize, Option<Vec<String>>)> = positions
         .par_chunks(chunk_size)
-        .flat_map(|positions| {
-            let mut table_file = TableFile::open(options.clone()).unwrap();
-            let res = table_file.get_positions(positions.into_iter().map(|(_, (c, p))| (c.to_string(), *p)).collect()).unwrap();
-            let res: Vec<(usize, Option<Vec<String>>)> = res.iter().zip(positions.iter()).map(|(r,(id, _))| (*id, r.clone())).collect();
-            res
+        .map(|positions| -> io::Result<Vec<ItemVec>> {
+            let mut table_file = TableFile::open(options.clone())?;
+            let res = table_file.get_positions(positions.into_iter().map(|(_, (c, p))| (c.to_string(), *p)).collect())?;
+            let res: Vec<ItemVec> = res.iter().zip(positions.iter()).map(|(r,(id, _))| (*id, r.clone())).collect();
+            Ok(res)
         })
+        .filter_map(|e| e.ok())
+        .flat_map(|e| { e })
         .collect();
     res.sort_by(|a, b| a.0.cmp(&b.0));
-    res.into_iter().map(|(_, e)| e).collect()
+    Ok(res.into_iter().map(|(_, e)| e).collect())
 }
 
 #[cfg(test)]
@@ -356,7 +359,7 @@ mod tests {
         println!("{}ms", now.elapsed().as_millis());
 
         let now = Instant::now();
-        let res = positions_par(all_pos.clone(), options.clone(), 200);
+        let res = positions_par(all_pos.clone(), options.clone(), 200).unwrap();
         println!("par {}ms, n = {}", now.elapsed().as_millis(), res.len());
 
         // res.iter().for_each(|e| println!("-> {:?}", e));
